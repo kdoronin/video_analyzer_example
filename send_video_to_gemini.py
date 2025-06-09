@@ -7,7 +7,7 @@ import mimetypes
 import os
 
 # Initialize Vertex AI with your project and global location
-vertexai.init(project="PROJECT_NAME", location="global")
+vertexai.init(project="PROJECT_ID", location="global")
 
 # Load the Gemini 2.5 Pro model
 model = GenerativeModel("gemini-2.5-pro-preview-06-05")
