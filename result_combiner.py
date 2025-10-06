@@ -1,8 +1,11 @@
 # Result combination utilities for video analysis
 
 import os
-from typing import List, Tuple
-from file_utils import save_analysis_to_file
+import re
+import json
+import subprocess
+from typing import List, Tuple, Optional, Dict, Any
+from file_utils import save_analysis_to_file, ensure_directory_exists
 
 
 class ResultCombiner:
@@ -71,24 +74,144 @@ class ResultCombiner:
         
         return analyses
     
-    def save_final_analysis(self, final_analysis: str, original_video_path: str) -> str:
+    @staticmethod
+    def extract_key_frames_json(text: str) -> Optional[Dict[str, Any]]:
+        """
+        Try to extract a JSON object with key "key_frames" from model output text.
+        Returns parsed dict or None if not found/parsable.
+        """
+        # 1) Look for fenced code blocks ```json ... ``` or ``` ... ```
+        fence_patterns = [
+            r"```json\s*([\s\S]*?)\s*```",
+            r"```\s*([\s\S]*?)\s*```",
+        ]
+        for pat in fence_patterns:
+            m = re.search(pat, text, flags=re.IGNORECASE)
+            if m:
+                candidate = m.group(1).strip()
+                try:
+                    data = json.loads(candidate)
+                    if isinstance(data, dict) and "key_frames" in data:
+                        return data
+                except Exception:
+                    pass
+        # 2) Fallback: find the first JSON-looking object containing "key_frames"
+        json_like = re.findall(r"\{[\s\S]*?\}", text)
+        for block in json_like:
+            if "key_frames" in block:
+                try:
+                    data = json.loads(block)
+                    if isinstance(data, dict) and "key_frames" in data:
+                        return data
+                except Exception:
+                    continue
+        return None
+
+    @staticmethod
+    def _sanitize_timecode_for_ffmpeg(timecode: str) -> str:
+        """Take timecode possibly with ranges and return a single start time suitable for ffmpeg -ss.
+        Accepts formats like 'hh:mm:ss', 'mm:ss', 'hh:mm:ss-hh:mm:ss'.
+        """
+        if not timecode:
+            return "00:00:00"
+        # Split on common range separators
+        for sep in ["-", "–", "—", " to ", "→", ">>", "→ "]:
+            if sep in timecode:
+                timecode = timecode.split(sep)[0].strip()
+                break
+        return timecode.strip()
+
+    @staticmethod
+    def timecode_to_seconds(timecode: str) -> int:
+        """Convert 'hh:mm:ss' or 'mm:ss' into total seconds. Handles ranges by taking start."""
+        t = ResultCombiner._sanitize_timecode_for_ffmpeg(str(timecode))
+        parts = t.split(":")
+        try:
+            if len(parts) == 3:
+                h, m, s = [int(float(p)) for p in parts]
+                return h * 3600 + m * 60 + s
+            if len(parts) == 2:
+                m, s = [int(float(p)) for p in parts]
+                return m * 60 + s
+            # Fallback if single number
+            return int(float(parts[0]))
+        except Exception:
+            return 0
+
+    @staticmethod
+    def seconds_to_timecode(seconds: int) -> str:
+        """Convert seconds into zero-padded 'hh:mm:ss'."""
+        seconds = max(0, int(seconds))
+        h = seconds // 3600
+        m = (seconds % 3600) // 60
+        s = seconds % 60
+        return f"{h:02d}:{m:02d}:{s:02d}"
+
+    def _export_key_frame_image(self, video_path: str, timecode: str, out_path: str) -> bool:
+        """Export a single frame from video at timecode to out_path using ffmpeg."""
+        # Ensure output directory exists
+        ensure_directory_exists(os.path.dirname(out_path))
+        # ffmpeg -ss TIME -i INPUT -frames:v 1 -q:v 2 OUTPUT
+        cmd = [
+            "ffmpeg", "-y",
+            "-ss", timecode,
+            "-i", video_path,
+            "-frames:v", "1",
+            "-q:v", "2",
+            out_path,
+        ]
+        try:
+            subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            return True
+        except Exception as e:
+            print(f"Warning: failed to export key frame at {timecode}: {e}")
+            return False
+
+    def save_final_analysis(self, final_analysis: str, original_video_path: str, require_json_keyframes: bool = False, key_frames_data: Optional[Dict[str, Any]] = None) -> str:
         """
         Save the final combined analysis to output file.
         
         Args:
             final_analysis: Combined analysis text
             original_video_path: Path to the original video file
+            require_json_keyframes: If True, try to extract key frames JSON and export images
             
         Returns:
-            Path to the saved final analysis file
+            Path to the saved final analysis file (.md)
         """
-        # Generate output filename
-        output_filename = os.path.splitext(original_video_path)[0] + ".txt"
+        # Prepare output directories and filenames
+        video_dir = os.path.dirname(original_video_path)
+        base_name = os.path.splitext(os.path.basename(original_video_path))[0]
+        out_dir = os.path.join(video_dir, base_name)
+        ensure_directory_exists(out_dir)
         
-        # Save the analysis
-        save_analysis_to_file(final_analysis, output_filename, original_video_path)
-        
-        return output_filename
+        final_output_path = os.path.join(out_dir, f"{base_name}.md")
+        # Save analysis content as markdown (header + content)
+        save_analysis_to_file(final_analysis, final_output_path, original_video_path)
+
+        if require_json_keyframes:
+            if key_frames_data is None:
+                key_frames_data = ResultCombiner.extract_key_frames_json(final_analysis)
+            if key_frames_data and isinstance(key_frames_data.get("key_frames"), list):
+                # Save JSON file
+                kf_dir = os.path.join(out_dir, "key_frames")
+                ensure_directory_exists(kf_dir)
+                kf_json_path = os.path.join(kf_dir, "key_frames.json")
+                with open(kf_json_path, "w", encoding="utf-8") as jf:
+                    json.dump(key_frames_data, jf, ensure_ascii=False, indent=2)
+                print(f"Saved key frames JSON to: {kf_json_path}")
+
+                # Export images for each frame
+                for idx, frame in enumerate(key_frames_data["key_frames"], start=1):
+                    tc = self._sanitize_timecode_for_ffmpeg(str(frame.get("timecode", "00:00:00")))
+                    safe_tc = tc.replace(":", "-")
+                    img_name = f"{idx:03d}_{safe_tc}.jpg"
+                    img_path = os.path.join(kf_dir, img_name)
+                    self._export_key_frame_image(original_video_path, tc, img_path)
+            else:
+                print("No parsable key_frames JSON found in the analysis output.")
+
+        return final_output_path
     
     def generate_summary_report(self, chunk_analysis_paths: List[str], final_analysis_path: str, 
                               original_video_path: str, processing_time: float) -> str:

@@ -14,6 +14,55 @@ from file_utils import get_temp_directory, ensure_directory_exists
 load_dotenv("config.env")
 
 
+def ask_prompt_options() -> tuple[str, bool]:
+    """Ask user to choose prompt type and whether to require JSON KeyFrames.
+
+    Returns:
+        (prompt_type, require_json_keyframes)
+    """
+    types = [
+        "general",
+        "lecture",
+        "meeting",
+        "presentation",
+        "tutorial",
+        "marketing",
+    ]
+
+    default_type = os.getenv("PROMPT_TYPE", "general").strip().lower()
+    if default_type not in types:
+        default_type = "general"
+    default_json = os.getenv("REQUIRE_JSON_KEYFRAMES", "false").strip().lower() in ("1", "true", "yes")
+
+    print("\nSelect prompt type:")
+    for idx, t in enumerate(types, 1):
+        mark = " (default)" if t == default_type else ""
+        print(f"  {idx}. {t}{mark}")
+    choice = input("Enter number (press Enter for default): ").strip()
+
+    if choice.isdigit():
+        i = int(choice)
+        if 1 <= i <= len(types):
+            prompt_type = types[i - 1]
+        else:
+            prompt_type = default_type
+    else:
+        prompt_type = default_type
+
+    yn = input(f"Require JSON KeyFrames? [y/N] (default={'Y' if default_json else 'N'}): ").strip().lower()
+    if yn == "":
+        require_json_keyframes = default_json
+    elif yn in ("y", "yes", "1"):
+        require_json_keyframes = True
+    elif yn in ("n", "no", "0"):
+        require_json_keyframes = False
+    else:
+        require_json_keyframes = default_json
+
+    print(f"\nUsing prompt_type='{prompt_type}', require_json_keyframes={require_json_keyframes}")
+    return prompt_type, require_json_keyframes
+
+
 def find_video_files(video_directory: str) -> list[str]:
     """
     Find all video files in the specified directory.
@@ -40,7 +89,7 @@ def find_video_files(video_directory: str) -> list[str]:
     return video_files
 
 
-def process_single_video(video_path: str, chunk_duration_minutes: int) -> bool:
+def process_single_video(video_path: str, chunk_duration_minutes: int, prompt_type: str, require_json_keyframes: bool) -> bool:
     """
     Process a single video file.
     
@@ -62,7 +111,11 @@ def process_single_video(video_path: str, chunk_duration_minutes: int) -> bool:
     try:
         # Initialize components
         video_processor = VideoProcessor(chunk_duration_minutes)
-        analyzer = GeminiAnalyzer()
+        # Analyzer with user-selected options
+        analyzer = GeminiAnalyzer(
+            prompt_type=prompt_type,
+            require_json_keyframes=require_json_keyframes,
+        )
         combiner = ResultCombiner()
         
         # Step 1: Split video into chunks if necessary
@@ -73,6 +126,7 @@ def process_single_video(video_path: str, chunk_duration_minutes: int) -> bool:
         print(f"\n🤖 Step 2: Analyzing {len(chunk_paths)} chunk(s) with Gemini...")
         chunk_analyses = []
         chunk_analysis_paths = []
+        collected_key_frames = []  # accumulate all key frames across chunks
         
         for i, chunk_path in enumerate(chunk_paths):
             # Get chunk information
@@ -81,6 +135,23 @@ def process_single_video(video_path: str, chunk_duration_minutes: int) -> bool:
             # Analyze the chunk
             analysis_text = analyzer.analyze_video_chunk(chunk_path, chunk_info)
             chunk_analyses.append(analysis_text)
+            # Collect key frames (if present)
+            if require_json_keyframes:
+                from result_combiner import ResultCombiner as RC
+                kf = RC.extract_key_frames_json(analysis_text)
+                if kf and isinstance(kf.get("key_frames"), list):
+                    # Adjust chunk-relative timecodes to absolute by adding chunk start offset
+                    start_offset_sec = int(chunk_info['index'] * (video_processor.chunk_duration_seconds))
+                    adjusted = []
+                    for item in kf["key_frames"]:
+                        tc = RC.timecode_to_seconds(item.get("timecode", "00:00:00"))
+                        abs_tc = RC.seconds_to_timecode(tc + start_offset_sec)
+                        adjusted.append({
+                            "timecode": abs_tc,
+                            "title": item.get("title", ""),
+                            "frame_description": item.get("frame_description", ""),
+                        })
+                    collected_key_frames.extend(adjusted)
             
             # Save chunk analysis to temporary file
             temp_dir = get_temp_directory()
@@ -103,7 +174,16 @@ def process_single_video(video_path: str, chunk_duration_minutes: int) -> bool:
         
         # Step 4: Save final result
         print(f"\n💾 Step 4: Saving final results...")
-        final_output_path = combiner.save_final_analysis(final_analysis, video_path)
+        # Build unified key frames JSON if requested
+        kf_payload = None
+        if require_json_keyframes and collected_key_frames:
+            kf_payload = {"key_frames": collected_key_frames}
+        final_output_path = combiner.save_final_analysis(
+            final_analysis,
+            video_path,
+            require_json_keyframes=require_json_keyframes,
+            key_frames_data=kf_payload,
+        )
         
         # Calculate processing time
         processing_time = time.time() - start_time
@@ -142,6 +222,9 @@ def main():
     video_directory = os.getenv("VIDEO_INPUT_DIRECTORY", "video")
     chunk_duration_minutes = int(os.getenv("CHUNK_DURATION_MINUTES", "10"))
     
+    # Ask user for prompt options once per batch
+    prompt_type, require_json_keyframes = ask_prompt_options()
+    
     # Ensure video directory exists
     if not os.path.exists(video_directory):
         print(f"📁 Creating video directory: {video_directory}")
@@ -170,7 +253,7 @@ def main():
     for i, video_path in enumerate(video_files, 1):
         print(f"\n🔄 Processing video {i}/{len(video_files)}")
         
-        success = process_single_video(video_path, chunk_duration_minutes)
+        success = process_single_video(video_path, chunk_duration_minutes, prompt_type, require_json_keyframes)
         if success:
             successful_count += 1
         else:

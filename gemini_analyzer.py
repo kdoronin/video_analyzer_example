@@ -9,6 +9,7 @@ import random
 from typing import Dict, List
 from google.api_core.exceptions import TooManyRequests, ResourceExhausted
 from dotenv import load_dotenv
+import xml.etree.ElementTree as ET
 
 # Load environment variables
 load_dotenv("config.env")
@@ -17,7 +18,7 @@ load_dotenv("config.env")
 class GeminiAnalyzer:
     """Handles video analysis using Google Gemini API."""
     
-    def __init__(self, project_id: str = None, location: str = None, model_name: str = None):
+    def __init__(self, project_id: str = None, location: str = None, model_name: str = None, prompt_type: str = None, require_json_keyframes: bool = None):
         """
         Initialize Gemini analyzer.
         
@@ -25,6 +26,8 @@ class GeminiAnalyzer:
             project_id: Google Cloud project ID (defaults to env variable)
             location: Vertex AI location (defaults to env variable)
             model_name: Gemini model name (defaults to env variable)
+            prompt_type: One of [general, lecture, meeting, presentation, tutorial, marketing]
+            require_json_keyframes: When True, ask model to ensure KeyFrames are emitted as JSON
         """
         # Use environment variables as defaults
         self.project_id = project_id or os.getenv("GOOGLE_CLOUD_PROJECT_ID")
@@ -36,6 +39,61 @@ class GeminiAnalyzer:
         
         vertexai.init(project=self.project_id, location=self.location)
         self.model = GenerativeModel(self.model_name)
+        # Prompt selection
+        self.prompt_type = (prompt_type or os.getenv("PROMPT_TYPE", "general")).strip().lower()
+        self.require_json_keyframes = (
+            require_json_keyframes
+            if require_json_keyframes is not None
+            else os.getenv("REQUIRE_JSON_KEYFRAMES", "false").strip().lower() in ("1", "true", "yes")
+        )
+        
+        # Load prompts from XML files
+        self.prompts_dir = os.path.join(os.path.dirname(__file__), "prompts")
+        # Prompt templates map
+        self.prompt_map = {
+            "general": "chunk_analysis_prompt.xml",
+            "lecture": "chunk_analysis_lecture.xml",
+            "meeting": "chunk_analysis_meeting.xml",
+            "presentation": "chunk_analysis_presentation.xml",
+            "tutorial": "chunk_analysis_tutorial.xml",
+            "marketing": "chunk_analysis_marketing.xml",
+        }
+        selected_prompt_file = self.prompt_map.get(self.prompt_type, self.prompt_map["general"])
+        self.chunk_prompt_template = self._load_xml_prompt(selected_prompt_file)
+        self.combine_prompt_template = self._load_xml_prompt("combine_analysis_prompt.xml")
+    
+    def _load_xml_prompt(self, filename: str) -> str:
+        """
+        Load XML prompt template from file.
+        
+        Args:
+            filename: Name of the XML prompt file
+            
+        Returns:
+            Raw XML content as string
+        """
+        prompt_path = os.path.join(self.prompts_dir, filename)
+        if not os.path.exists(prompt_path):
+            raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
+        
+        with open(prompt_path, 'r', encoding='utf-8') as f:
+            return f.read()
+    
+    def _format_prompt(self, template: str, **params) -> str:
+        """
+        Format XML prompt template with parameters.
+        
+        Args:
+            template: XML template string
+            **params: Parameters to substitute in template
+            
+        Returns:
+            Formatted prompt string
+        """
+        formatted = template
+        for key, value in params.items():
+            formatted = formatted.replace(f"{{{key}}}", str(value))
+        return formatted
     
     def _retry_with_backoff(self, func, *args, max_retries: int = 5, **kwargs):
         """
@@ -91,7 +149,7 @@ class GeminiAnalyzer:
     
     def _generate_chunk_prompt(self, chunk_info: Dict) -> str:
         """
-        Generate appropriate prompt for video chunk analysis.
+        Generate appropriate prompt for video chunk analysis using XML template.
         
         Args:
             chunk_info: Dictionary with chunk information
@@ -99,28 +157,24 @@ class GeminiAnalyzer:
         Returns:
             Prompt string for analysis
         """
-        if chunk_info['is_first'] and chunk_info['total_chunks'] == 1:
-            # Single chunk (entire video)
-            return "Детально опиши, что происходит на видео. ОБЯЗАТЕЛЬНО отвечай на русском языке."
-        elif chunk_info['is_first']:
-            # First chunk of multiple
-            return (f"Это первая часть видео (из {chunk_info['total_chunks']} частей). "
-                   f"Длительность этой части: {chunk_info['duration']/60:.1f} минут. "
-                   f"Детально опиши, что происходит в этой части видео. ОБЯЗАТЕЛЬНО отвечай на русском языке.")
-        elif chunk_info['is_last']:
-            # Last chunk
-            return (f"Это заключительная {chunk_info['index']+1}-я часть видео "
-                   f"(из {chunk_info['total_chunks']} частей). "
-                   f"Временные рамки: {chunk_info['start_time_minutes']:.1f}-{chunk_info['end_time_minutes']:.1f} минут. "
-                   f"Длительность этой части: {chunk_info['duration']/60:.1f} минут. "
-                   f"Детально опиши, что происходит в этой заключительной части видео. ОБЯЗАТЕЛЬНО отвечай на русском языке.")
-        else:
-            # Middle chunk
-            return (f"Это {chunk_info['index']+1}-я часть видео "
-                   f"(из {chunk_info['total_chunks']} частей). "
-                   f"Временные рамки: {chunk_info['start_time_minutes']:.1f}-{chunk_info['end_time_minutes']:.1f} минут. "
-                   f"Длительность этой части: {chunk_info['duration']/60:.1f} минут. "
-                   f"Детально опиши, что происходит в этой части видео. ОБЯЗАТЕЛЬНО отвечай на русском языке.")
+        # Format the prompt with chunk information
+        base_prompt = self._format_prompt(
+            self.chunk_prompt_template,
+            chunk_number=chunk_info['index'] + 1,
+            total_chunks=chunk_info['total_chunks'],
+            start_time_minutes=f"{chunk_info.get('start_time_minutes', 0):.1f}",
+            end_time_minutes=f"{chunk_info.get('end_time_minutes', chunk_info['duration']/60):.1f}",
+            duration_minutes=f"{chunk_info['duration']/60:.1f}"
+        )
+        if self.require_json_keyframes:
+            # Append shared XML postfix with JSON KeyFrames instructions
+            postfix_path = os.path.join(self.prompts_dir, "common_keyframes_postfix.xml")
+            if os.path.exists(postfix_path):
+                with open(postfix_path, "r", encoding="utf-8") as pf:
+                    base_prompt += "\n\n" + pf.read().strip()
+            else:
+                print("Warning: common_keyframes_postfix.xml not found; proceeding without JSON KeyFrames postfix")
+        return base_prompt
     
     def analyze_video_chunk(self, video_path: str, chunk_info: Dict) -> str:
         """
@@ -163,23 +217,20 @@ class GeminiAnalyzer:
         """
         print("Combining all chunk analyses into unified description...")
         
-        # Prepare the prompt for combination
-        combined_text = "АНАЛИЗЫ ЧАСТЕЙ ВИДЕО:\n\n"
-        
+        # Prepare chunk analyses text
+        chunk_analyses_text = ""
         for i, analysis in enumerate(analyses, 1):
-            combined_text += f"=== ЧАСТЬ {i} ===\n{analysis}\n\n"
+            chunk_analyses_text += f"=== ЧАСТЬ {i} ===\n{analysis}\n\n"
         
-        combination_prompt = (
-            "Выше представлены отдельные анализы частей одного видео. "
-            "Создай единый связный и подробный анализ всего видео, объединив информацию из всех частей. "
-            "Структурируй описание логично, избегай повторений, но сохрани все важные детали. "
-            "Результат должен читаться как анализ цельного видео, а не как набор отдельных частей. "
-            "ОБЯЗАТЕЛЬНО отвечай на русском языке."
+        # Format the prompt with chunk analyses
+        combination_prompt = self._format_prompt(
+            self.combine_prompt_template,
+            chunk_analyses=chunk_analyses_text
         )
         
         # Generate combined analysis with retry mechanism
         def _generate_combined_content():
-            return self.model.generate_content([combined_text, combination_prompt])
+            return self.model.generate_content(combination_prompt)
         
         response = self._retry_with_backoff(_generate_combined_content)
         return response.text
@@ -199,8 +250,15 @@ class GeminiAnalyzer:
         # Create video part
         video_part = self._create_video_part(video_path)
         
-        # Use simple prompt for single video
-        prompt = "Детально опиши, что происходит на видео. ОБЯЗАТЕЛЬНО отвечай на русском языке."
+        # Use XML prompt template for single video (chunk 1 of 1)
+        prompt = self._format_prompt(
+            self.chunk_prompt_template,
+            chunk_number=1,
+            total_chunks=1,
+            start_time_minutes="0.0",
+            end_time_minutes="0.0",
+            duration_minutes="0.0"
+        )
         
         # Generate content with retry mechanism
         def _generate_single_content():
