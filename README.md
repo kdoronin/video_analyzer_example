@@ -22,49 +22,227 @@
 6. **Промежуточные файлы**: Сохраняются в папке `temporary/` для отладки
 7. **Итоговый результат**: Единый `.txt` файл с полным описанием
 
-## Использование
+## Установка и настройка
 
-1. **Установите Google Cloud SDK** (обязательно для работы с Vertex AI):
-   
-   Перейдите на [официальную страницу установки](https://cloud.google.com/sdk/docs/install) и выберите инструкции для вашей операционной системы:
-   
-   - **macOS**: Скачайте архив и запустите `./install.sh`
-   - **Linux**: Скачайте архив и запустите `./install.sh`  
-   - **Windows**: Скачайте установщик GoogleCloudSDKInstaller.exe
-   
-   После установки выполните аутентификацию:
+### Шаг 1: Установка Python и зависимостей
+
+1. **Убедитесь, что установлен Python 3.8 или выше:**
    ```bash
-   gcloud auth application-default login
+   python3 --version
    ```
 
-2. Убедитесь, что установлен ffmpeg:
+2. **Рекомендуется использовать виртуальное окружение:**
+   ```bash
+   # Создайте виртуальное окружение
+   python3 -m venv venv
+   
+   # Активируйте его
+   # macOS/Linux:
+   source venv/bin/activate
+   # Windows:
+   venv\Scripts\activate
+   ```
+
+3. **Установите зависимости:**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+### Шаг 2: Установка Google Cloud SDK
+
+Google Cloud SDK необходим для работы с Vertex AI API. Выберите способ установки для вашей операционной системы:
+
+#### macOS (через Homebrew - рекомендуется):
+```bash
+brew install --cask google-cloud-sdk
+```
+
+После установки добавьте gcloud в PATH (если еще не добавлен автоматически):
+```bash
+# Добавьте в ~/.zshrc или ~/.bash_profile:
+export PATH="/opt/homebrew/share/google-cloud-sdk/bin:$PATH"
+```
+
+#### macOS (ручная установка):
+1. Скачайте архив с [официального сайта](https://cloud.google.com/sdk/docs/install)
+2. Распакуйте архив
+3. Запустите установщик:
+   ```bash
+   ./google-cloud-sdk/install.sh
+   ```
+
+#### Linux:
+1. Скачайте архив с [официального сайта](https://cloud.google.com/sdk/docs/install)
+2. Распакуйте и запустите:
+   ```bash
+   tar -xzf google-cloud-cli-*.tar.gz
+   ./google-cloud-sdk/install.sh
+   ```
+
+#### Windows:
+1. Скачайте установщик `GoogleCloudSDKInstaller.exe` с [официального сайта](https://cloud.google.com/sdk/docs/install)
+2. Запустите установщик и следуйте инструкциям
+
+#### Проверка установки:
+```bash
+gcloud --version
+```
+
+Должна отобразиться версия Google Cloud SDK.
+
+### Шаг 3: Создание Google Cloud проекта
+
+1. **Откройте [Google Cloud Console](https://console.cloud.google.com/)**
+
+2. **Создайте новый проект или выберите существующий:**
+   - Нажмите на выпадающий список проектов в верхней части страницы
+   - Нажмите "New Project" для создания нового проекта
+   - Введите название проекта и нажмите "Create"
+   - **Важно**: Запомните **Project ID** (не Project Name!) - это строка вида `my-project-123456`
+
+3. **Включите Vertex AI API:**
+   - Перейдите в "APIs & Services" → "Library"
+   - Найдите "Vertex AI API" (или "Cloud AI Platform API")
+   - Нажмите "Enable"
+
+4. **Проверьте включение API через командную строку:**
+   ```bash
+   gcloud services list --enabled --filter="name:aiplatform.googleapis.com"
+   ```
+   
+   Должна отобразиться строка с `aiplatform.googleapis.com`. Если API не включен, включите его:
+   ```bash
+   gcloud services enable aiplatform.googleapis.com
+   ```
+
+### Шаг 4: Настройка аутентификации Google Cloud
+
+Для работы программы необходимо настроить два типа аутентификации:
+
+#### 4.1. Application Default Credentials (для Python библиотек)
+
+Эта аутентификация используется Python-скриптами для доступа к Vertex AI API:
+
+```bash
+# Выполните аутентификацию (откроется браузер для входа)
+gcloud auth application-default login
+```
+
+После успешной аутентификации credentials будут сохранены в:
+- **macOS/Linux**: `~/.config/gcloud/application_default_credentials.json`
+- **Windows**: `%APPDATA%\gcloud\application_default_credentials.json`
+
+#### 4.2. Установка quota project
+
+После выполнения `gcloud auth application-default login` вы увидите предупреждение о quota project. Установите его:
+
+```bash
+# Замените YOUR_PROJECT_ID на ваш реальный Project ID
+gcloud auth application-default set-quota-project YOUR_PROJECT_ID
+```
+
+#### 4.3. Обычная аутентификация gcloud (для команд gcloud)
+
+Эта аутентификация нужна для работы с командами gcloud:
+
+```bash
+# Выполните аутентификацию (откроется браузер для входа)
+gcloud auth login
+```
+
+#### 4.4. Установка проекта по умолчанию
+
+```bash
+# Замените YOUR_PROJECT_ID на ваш реальный Project ID
+gcloud config set project YOUR_PROJECT_ID
+```
+
+#### 4.5. Проверка настройки
+
+Проверьте, что все настроено правильно:
+
+```bash
+# Проверьте текущий проект
+gcloud config get-value project
+
+# Проверьте включенные API
+gcloud services list --enabled --filter="name:aiplatform.googleapis.com"
+
+# Проверьте аутентификацию
+gcloud auth list
+```
+
+### Шаг 5: Установка ffmpeg
+
+ffmpeg необходим для разбиения видео на части.
+
+#### macOS:
+```bash
+brew install ffmpeg
+```
+
+#### Ubuntu/Debian:
+```bash
+sudo apt update
+sudo apt install ffmpeg
+```
+
+#### Windows:
+1. Скачайте с [ffmpeg.org](https://ffmpeg.org/download.html)
+2. Распакуйте и добавьте в PATH
+
+#### Проверка установки:
 ```bash
 ffmpeg -version
 ```
 
-3. Установите Python зависимости:
-```bash
-pip install -r requirements.txt
-```
+### Шаг 6: Настройка конфигурации
 
-4. Настройте конфигурацию:
-```bash
-# Скопируйте шаблон конфигурации
-cp config.env.example config.env
+1. **Скопируйте шаблон конфигурации:**
+   ```bash
+   cp config.env.example config.env
+   ```
 
-# Отредактируйте config.env и обязательно измените:
-# GOOGLE_CLOUD_PROJECT_ID=your-google-cloud-project-id
-# на ваш реальный Google Cloud Project ID
-```
+2. **Откройте файл config.env в редакторе:**
+   ```bash
+   nano config.env
+   # или
+   code config.env
+   # или
+   vim config.env
+   ```
 
-⚠️ **ВАЖНО**: Обязательно замените `your-google-cloud-project-id` на ваш реальный Google Cloud Project ID!
+3. **Обязательно измените следующие параметры:**
+   ```bash
+   # Замените your-google-cloud-project-id на ваш реальный Project ID
+   GOOGLE_CLOUD_PROJECT_ID=your-google-cloud-project-id
+   ```
+   
+   ⚠️ **ВАЖНО**: Используйте **Project ID**, а не Project Name! Project ID выглядит как `my-project-123456`.
 
-5. Поместите ваши видеофайлы в папку `video/` (папка создается автоматически при первом запуске)
+4. **Пример правильного config.env:**
+   ```bash
+   GOOGLE_CLOUD_PROJECT_ID=my-video-analyzer-project-123456
+   VERTEX_AI_LOCATION=global
+   GEMINI_MODEL_NAME=gemini-2.5-pro
+   CHUNK_DURATION_MINUTES=10
+   VIDEO_INPUT_DIRECTORY=video
+   ```
 
-6. Запустите анализ всех видео:
-```bash
-python send_video_to_gemini.py
-```
+## Использование
+
+1. **Поместите ваши видеофайлы в папку `video/`** (папка создается автоматически при первом запуске)
+
+2. **Запустите анализ всех видео:**
+   ```bash
+   python send_video_to_gemini.py
+   ```
+   
+   Если используете виртуальное окружение, убедитесь, что оно активировано:
+   ```bash
+   source venv/bin/activate  # macOS/Linux
+   python send_video_to_gemini.py
+   ```
 
 ### Пример работы:
 
@@ -154,36 +332,23 @@ CHUNK_DURATION_MINUTES=10                    # Длительность куск
 VIDEO_INPUT_DIRECTORY=video                  # Папка с входными видеофайлами
 ```
 
-### Как получить Google Cloud Project ID
+### Как найти Google Cloud Project ID
 
-1. **Установите Google Cloud SDK** ([инструкции](https://cloud.google.com/sdk/docs/install))
-2. **Откройте [Google Cloud Console](https://console.cloud.google.com/)**
-3. **Выберите или создайте проект** в верхней части страницы
-4. **Скопируйте Project ID** (не Project Name!) - это строка вида `my-project-123456`
-5. **Включите Vertex AI API**:
-   - Перейдите в "APIs & Services" → "Library" 
-   - Найдите "Vertex AI API" и включите его
-6. **Настройте аутентификацию**:
+Если вы уже создали проект, но не помните Project ID:
+
+1. **Через Google Cloud Console:**
+   - Откройте [Google Cloud Console](https://console.cloud.google.com/)
+   - Project ID отображается в выпадающем списке проектов в верхней части страницы
+   - Это строка вида `my-project-123456` (не путайте с Project Name!)
+
+2. **Через командную строку:**
    ```bash
-   gcloud auth application-default login
-   gcloud config set project YOUR_PROJECT_ID
+   # Список всех ваших проектов
+   gcloud projects list
+   
+   # Текущий активный проект
+   gcloud config get-value project
    ```
-
-### Создание config.env файла
-
-```bash
-# 1. Скопируйте шаблон
-cp config.env.example config.env
-
-# 2. Откройте в любом редакторе
-nano config.env
-# или
-code config.env
-
-# 3. Замените your-google-cloud-project-id на ваш реальный Project ID
-# Пример:
-# GOOGLE_CLOUD_PROJECT_ID=my-video-analyzer-project
-```
 
 ### Безопасность
 
@@ -217,11 +382,21 @@ code config.env
 - Превышены лимиты API. Скрипт автоматически сделает паузу и повторит запрос
 - Если ошибка повторяется - проверьте квоты в Google Cloud Console
 
-**"Permission denied / Authentication error"**
+**"Permission denied / Authentication error" / "DefaultCredentialsError"**
 - Убедитесь, что Google Cloud SDK установлен: `gcloud --version`
-- Выполните аутентификацию: `gcloud auth application-default login`
-- Убедитесь, что Vertex AI API включен в вашем проекте
+- Выполните оба типа аутентификации:
+  ```bash
+  gcloud auth application-default login
+  gcloud auth login
+  ```
+- Установите quota project: `gcloud auth application-default set-quota-project YOUR_PROJECT_ID`
+- Установите проект по умолчанию: `gcloud config set project YOUR_PROJECT_ID`
+- Убедитесь, что Vertex AI API включен в вашем проекте:
+  ```bash
+  gcloud services enable aiplatform.googleapis.com
+  ```
 - Проверьте, что используете правильный проект: `gcloud config get-value project`
+- Проверьте credentials: `gcloud auth list`
 
 **"ffmpeg not found"**
 - macOS: `brew install ffmpeg`
@@ -236,8 +411,29 @@ code config.env
 ## Требования
 
 - **Python 3.8+**
-- **Google Cloud SDK** ([инструкции по установке](https://cloud.google.com/sdk/docs/install))
+- **Google Cloud SDK** (см. раздел "Установка и настройка")
 - **Google Cloud проект** с включенным Vertex AI API
 - **ffmpeg** установлен в системе
 - **Видео файлы** в поддерживаемом формате (MP4, AVI, MOV и др.)
-- **Настроенная аутентификация** Google Cloud (`gcloud auth application-default login`)
+- **Настроенная аутентификация** Google Cloud:
+  - `gcloud auth application-default login` (Application Default Credentials)
+  - `gcloud auth login` (обычная аутентификация)
+  - `gcloud auth application-default set-quota-project YOUR_PROJECT_ID` (quota project)
+  - `gcloud config set project YOUR_PROJECT_ID` (проект по умолчанию)
+
+## Быстрый старт
+
+Если вы уже выполнили все шаги установки, вот краткая памятка:
+
+```bash
+# 1. Активируйте виртуальное окружение (если используете)
+source venv/bin/activate
+
+# 2. Проверьте настройки
+gcloud config get-value project
+gcloud auth list
+
+# 3. Поместите видео в папку video/
+# 4. Запустите анализ
+python send_video_to_gemini.py
+```
