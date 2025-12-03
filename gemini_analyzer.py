@@ -26,7 +26,7 @@ class GeminiAnalyzer:
             project_id: Google Cloud project ID (defaults to env variable)
             location: Vertex AI location (defaults to env variable)
             model_name: Gemini model name (defaults to env variable)
-            prompt_type: One of [general, lecture, meeting, presentation, tutorial, marketing]
+            prompt_type: One of [general, lecture, meeting, presentation, tutorial, marketing, language_lesson, interview]
             require_json_keyframes: When True, ask model to ensure KeyFrames are emitted as JSON
         """
         # Use environment variables as defaults
@@ -57,6 +57,8 @@ class GeminiAnalyzer:
             "presentation": "chunk_analysis_presentation.xml",
             "tutorial": "chunk_analysis_tutorial.xml",
             "marketing": "chunk_analysis_marketing.xml",
+            "language_lesson": "chunk_analysis_language_lesson.xml",
+            "interview": "chunk_analysis_interview.xml",
         }
         selected_prompt_file = self.prompt_map.get(self.prompt_type, self.prompt_map["general"])
         self.chunk_prompt_template = self._load_xml_prompt(selected_prompt_file)
