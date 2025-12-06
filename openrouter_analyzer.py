@@ -5,10 +5,10 @@ import time
 import random
 import base64
 import mimetypes
-from typing import Dict, List, Optional
+import httpx
+from typing import Dict, List
 from dotenv import load_dotenv
 from openai import OpenAI
-from openai import RateLimitError
 
 # Load environment variables
 load_dotenv("config.env")
@@ -40,9 +40,16 @@ class OpenRouterAnalyzer:
             raise ValueError("OpenRouter API key must be provided via OPENROUTER_API_KEY env variable or parameter")
 
         # Initialize OpenAI client with OpenRouter base URL
+        # Extended timeout for long video processing (up to 60 min videos)
         self.client = OpenAI(
             base_url="https://openrouter.ai/api/v1",
             api_key=self.api_key,
+            timeout=httpx.Timeout(
+                timeout=1800.0,    # 30 min total timeout
+                connect=60.0,      # 60 sec connect timeout
+                read=1800.0,       # 30 min read timeout (waiting for response)
+                write=300.0,       # 5 min write timeout (uploading video)
+            ),
         )
 
         # Prompt selection
@@ -118,20 +125,22 @@ class OpenRouterAnalyzer:
         for attempt in range(max_retries + 1):
             try:
                 return func(*args, **kwargs)
-            except RateLimitError as e:
+            except Exception as e:
+                error_str = str(e).lower()
+                is_rate_limit = "rate" in error_str or "429" in error_str
+
                 if attempt == max_retries:
                     print(f"Max retries exceeded ({max_retries})")
                     raise e
 
-                # Calculate delay with exponential backoff + jitter
-                base_delay = 2 ** attempt  # 2, 4, 8, 16, 32 seconds
-                jitter = random.uniform(0.5, 1.5)
-                delay = base_delay * jitter
-
-                print(f"Rate limit hit. Waiting {delay:.1f} seconds... (attempt {attempt + 1}/{max_retries})")
-                time.sleep(delay)
-            except Exception as e:
-                raise e
+                if is_rate_limit:
+                    base_delay = 2 ** attempt
+                    jitter = random.uniform(0.5, 1.5)
+                    delay = base_delay * jitter
+                    print(f"Rate limit hit. Waiting {delay:.1f} seconds... (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(delay)
+                else:
+                    raise e
 
     def _encode_video_to_base64(self, video_path: str) -> tuple[str, str]:
         """
@@ -210,12 +219,12 @@ class OpenRouterAnalyzer:
                 "role": "user",
                 "content": [
                     {
-                        "type": "video_url",
-                        "video_url": {"url": data_url}
-                    },
-                    {
                         "type": "text",
                         "text": prompt
+                    },
+                    {
+                        "type": "video_url",
+                        "video_url": {"url": data_url}
                     }
                 ]
             }
@@ -302,12 +311,12 @@ class OpenRouterAnalyzer:
                 "role": "user",
                 "content": [
                     {
-                        "type": "video_url",
-                        "video_url": {"url": data_url}
-                    },
-                    {
                         "type": "text",
                         "text": prompt
+                    },
+                    {
+                        "type": "video_url",
+                        "video_url": {"url": data_url}
                     }
                 ]
             }
