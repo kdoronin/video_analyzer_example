@@ -1,6 +1,6 @@
 # Video Analyzer with Automatic Chunking
 
-Продвинутый анализатор видео с автоматическим разбиением на части и анализом через Gemini 2.5 Pro.
+Продвинутый анализатор видео с автоматическим разбиением на части и анализом через Google Gemini или OpenRouter API.
 
 ## Архитектура
 
@@ -8,7 +8,9 @@
 
 - **`send_video_to_gemini.py`** - основной скрипт-координатор
 - **`video_processor.py`** - разбиение видео на куски по 10 минут (использует ffmpeg)
-- **`gemini_analyzer.py`** - анализ видео через Gemini API
+- **`gemini_analyzer.py`** - анализ видео через Google Gemini (Vertex AI)
+- **`openrouter_analyzer.py`** - анализ видео через OpenRouter API
+- **`analyzer_factory.py`** - фабрика для выбора анализатора
 - **`result_combiner.py`** - объединение результатов анализа
 - **`file_utils.py`** - утилиты для работы с файлами
 
@@ -320,17 +322,46 @@ project_root/
 Все настройки хранятся в файле `config.env`:
 
 ```bash
-# Google Cloud configuration
+# Выбор анализатора: 'gemini' или 'openrouter'
+ANALYZER_TYPE=gemini
+
+# Google Cloud configuration (для ANALYZER_TYPE=gemini)
 GOOGLE_CLOUD_PROJECT_ID=your-project-id-here  # ОБЯЗАТЕЛЬНО измените!
 VERTEX_AI_LOCATION=global                     # Обычно не меняется
-
-# Gemini model configuration  
 GEMINI_MODEL_NAME=gemini-2.5-pro             # Можно использовать другие модели
+
+# OpenRouter configuration (для ANALYZER_TYPE=openrouter)
+OPENROUTER_API_KEY=your-openrouter-api-key   # Получите на https://openrouter.ai/keys
+OPENROUTER_MODEL_NAME=google/gemini-2.5-pro-preview  # Модель с поддержкой видео
 
 # Video processing configuration
 CHUNK_DURATION_MINUTES=10                    # Длительность кусков в минутах
 VIDEO_INPUT_DIRECTORY=video                  # Папка с входными видеофайлами
 ```
+
+### Выбор анализатора
+
+**Google Gemini (Vertex AI)** - `ANALYZER_TYPE=gemini`
+- Требует Google Cloud проект и настройку аутентификации
+- Поддерживает большие видеофайлы (до 2 GB)
+- Использует нативный Google Cloud SDK
+
+**OpenRouter** - `ANALYZER_TYPE=openrouter`
+- Требует только API ключ OpenRouter
+- Проще в настройке, не нужен Google Cloud
+- Доступ к различным моделям через единый API
+- Список моделей с поддержкой видео: https://openrouter.ai/models?input_modalities=video
+
+### Ограничения OpenRouter
+
+> **Важно:** OpenRouter использует base64-кодирование для передачи видео через HTTP, что ограничивает размер файла примерно **15-20 MB** на один запрос.
+
+Для работы с большими видео через OpenRouter:
+- Уменьшите `CHUNK_DURATION_MINUTES` чтобы каждый чанк был меньше 15 MB
+- Рекомендуемые значения: 3-5 минут для видео стандартного качества (720p)
+- Для видео высокого качества (1080p, 4K) используйте ещё меньшие значения
+
+При использовании **Gemini напрямую** (Vertex AI) такого ограничения нет — SDK автоматически обрабатывает большие файлы через Google Cloud инфраструктуру.
 
 ### Как найти Google Cloud Project ID
 
