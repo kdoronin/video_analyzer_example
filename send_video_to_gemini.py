@@ -1,12 +1,13 @@
 # Advanced video analyzer with automatic chunking and analysis
 # Splits long videos into chunks, analyzes each part separately, then combines results
+# Supports both Google Gemini (via Vertex AI) and OpenRouter API
 
 import os
 import time
 import glob
 from dotenv import load_dotenv
 from video_processor import VideoProcessor
-from gemini_analyzer import GeminiAnalyzer
+from analyzer_factory import create_analyzer, get_analyzer_info
 from result_combiner import ResultCombiner
 from file_utils import get_temp_directory, ensure_directory_exists
 
@@ -113,8 +114,8 @@ def process_single_video(video_path: str, chunk_duration_minutes: int, prompt_ty
     try:
         # Initialize components
         video_processor = VideoProcessor(chunk_duration_minutes)
-        # Analyzer with user-selected options
-        analyzer = GeminiAnalyzer(
+        # Analyzer with user-selected options (uses factory to select Gemini or OpenRouter)
+        analyzer = create_analyzer(
             prompt_type=prompt_type,
             require_json_keyframes=require_json_keyframes,
         )
@@ -219,11 +220,20 @@ def process_single_video(video_path: str, chunk_duration_minutes: int, prompt_ty
 
 def main():
     """Main function to process all videos in the input directory."""
-    
+
     # Configuration from environment variables
     video_directory = os.getenv("VIDEO_INPUT_DIRECTORY", "video")
     chunk_duration_minutes = int(os.getenv("CHUNK_DURATION_MINUTES", "10"))
-    
+
+    # Show analyzer configuration
+    analyzer_info = get_analyzer_info()
+    print(f"\n{'='*80}")
+    print(f"Video Analyzer Configuration")
+    print(f"{'='*80}")
+    print(f"Analyzer: {analyzer_info['description']}")
+    print(f"Model: {analyzer_info['model']}")
+    print(f"{'='*80}")
+
     # Ask user for prompt options once per batch
     prompt_type, require_json_keyframes = ask_prompt_options()
     
