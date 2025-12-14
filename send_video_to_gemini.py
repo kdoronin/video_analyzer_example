@@ -30,6 +30,7 @@ def ask_prompt_options() -> tuple[str, bool]:
         "marketing",
         "language_lesson",
         "interview",
+        "voiceover",
     ]
 
     default_type = os.getenv("PROMPT_TYPE", "general").strip().lower()

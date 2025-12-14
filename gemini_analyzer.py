@@ -59,6 +59,7 @@ class GeminiAnalyzer:
             "marketing": "chunk_analysis_marketing.xml",
             "language_lesson": "chunk_analysis_language_lesson.xml",
             "interview": "chunk_analysis_interview.xml",
+            "voiceover": "chunk_analysis_voiceover.xml",
         }
         selected_prompt_file = self.prompt_map.get(self.prompt_type, self.prompt_map["general"])
         self.chunk_prompt_template = self._load_xml_prompt(selected_prompt_file)
